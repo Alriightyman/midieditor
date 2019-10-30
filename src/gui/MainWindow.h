@@ -42,6 +42,8 @@ class QGridLayout;
 class MidiTrack;
 class QShowEvent;
 class Update;
+class SelectionNavigator;
+class TweakTarget;
 
 class MainWindow : public QMainWindow {
 
@@ -50,6 +52,8 @@ class MainWindow : public QMainWindow {
 public:
     MainWindow(QString initFile = "");
     void setFile(MidiFile* f);
+    MidiFile* getFile();
+    MatrixWidget* matrixWidget();
     EventWidget* eventWidget();
     void setStartDir(QString dir);
     void setInitFile(const char* file);
@@ -59,7 +63,7 @@ protected:
     void dragEnterEvent(QDragEnterEvent* ev);
 
 public slots:
-
+    void updateAll();
     void loadInitFile();
     void matrixSizeChanged(int maxScrollTime, int maxScrollLine, int vX, int vY);
     void play();
@@ -69,6 +73,8 @@ public slots:
     void forward();
     void back();
     void backToBegin();
+    void forwardMarker();
+    void backMarker();
     void load();
     void loadFile(QString file);
     void openFile(QString filePath);
@@ -173,6 +179,23 @@ public slots:
     void updateDetected(Update* update);
     void promtUpdatesDeactivatedDialog();
 
+    void tweakTime();
+    void tweakStartTime();
+    void tweakEndTime();
+    void tweakNote();
+    void tweakValue();
+    void tweakSmallDecrease();
+    void tweakSmallIncrease();
+    void tweakMediumDecrease();
+    void tweakMediumIncrease();
+    void tweakLargeDecrease();
+    void tweakLargeIncrease();
+
+    void navigateSelectionUp();
+    void navigateSelectionDown();
+    void navigateSelectionLeft();
+    void navigateSelectionRight();
+
 protected:
     void closeEvent(QCloseEvent* event);
     void keyPressEvent(QKeyEvent* e);
@@ -215,6 +238,9 @@ private:
     int _quantizationGrid;
     int quantize(int t, QList<int> ticks);
     QList<QAction*> _activateWithSelections;
+
+    TweakTarget* currentTweakTarget;
+    SelectionNavigator* selectionNavigator;
 };
 
 #endif

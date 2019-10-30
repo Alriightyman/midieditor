@@ -42,7 +42,9 @@
 #include <QTextStream>
 #include <QToolBar>
 #include <QToolButton>
+#include <QDesktopServices>
 
+#include "Appearance.h"
 #include "AboutDialog.h"
 #include "ChannelListWidget.h"
 #include "ClickButton.h"
@@ -55,18 +57,23 @@
 #include "NToleQuantizationDialog.h"
 #include "ProtocolWidget.h"
 #include "RecordDialog.h"
+#include "SelectionNavigator.h"
 #include "SettingsDialog.h"
 #include "TrackListWidget.h"
 #include "TransposeDialog.h"
+#include "TweakTarget.h"
 
 #include "../tool/EraserTool.h"
 #include "../tool/EventMoveTool.h"
 #include "../tool/EventTool.h"
+#include "../tool/MeasureTool.h"
 #include "../tool/NewNoteTool.h"
 #include "../tool/SelectTool.h"
 #include "../tool/Selection.h"
 #include "../tool/SizeChangeTool.h"
 #include "../tool/StandardTool.h"
+#include "../tool/TempoTool.h"
+#include "../tool/TimeSignatureTool.h"
 #include "../tool/Tool.h"
 #include "../tool/ToolButton.h"
 
@@ -81,6 +88,7 @@
 #include "../MidiEvent/NoteOnEvent.h"
 #include "../MidiEvent/OffEvent.h"
 #include "../MidiEvent/OnEvent.h"
+#include "../MidiEvent/TextEvent.h"
 #include "../MidiEvent/TimeSignatureEvent.h"
 #include "../midi/Metronome.h"
 #include "../midi/MidiChannel.h"
@@ -106,6 +114,8 @@ MainWindow::MainWindow(QString initFile)
 
     _moveSelectedEventsToChannelMenu = 0;
     _moveSelectedEventsToTrackMenu = 0;
+
+    Appearance::init(_settings);
 
 #ifdef ENABLE_REMOTE
     bool ok;
@@ -274,6 +284,7 @@ MainWindow::MainWindow(QString initFile)
     for (int i = 0; i < MiscModeEnd; i++) {
         _miscMode->addItem(MiscWidget::modeToString(i));
     }
+    _miscMode->view()->setMinimumWidth(_miscMode->minimumSizeHint().width());
     //_miscControlLayout->addWidget(new QLabel("Mode:", _miscWidgetControl), 0, 0, 1, 3);
     _miscControlLayout->addWidget(_miscMode, 1, 0, 1, 3);
     connect(_miscMode, SIGNAL(currentIndexChanged(int)), this, SLOT(changeMiscMode(int)));
@@ -283,6 +294,7 @@ MainWindow::MainWindow(QString initFile)
     for (int i = 0; i < 128; i++) {
         _miscController->addItem(MidiFile::controlChangeName(i));
     }
+    _miscController->view()->setMinimumWidth(_miscController->minimumSizeHint().width());
     _miscControlLayout->addWidget(_miscController, 3, 0, 1, 3);
     connect(_miscController, SIGNAL(currentIndexChanged(int)), _miscWidget, SLOT(setControl(int)));
 
@@ -291,6 +303,7 @@ MainWindow::MainWindow(QString initFile)
     for (int i = 0; i < 15; i++) {
         _miscChannel->addItem("Channel " + QString::number(i));
     }
+    _miscChannel->view()->setMinimumWidth(_miscChannel->minimumSizeHint().width());
     _miscControlLayout->addWidget(_miscChannel, 5, 0, 1, 3);
     connect(_miscChannel, SIGNAL(currentIndexChanged(int)), _miscWidget, SLOT(setChannel(int)));
     _miscControlLayout->setRowStretch(6, 1);
@@ -433,7 +446,6 @@ MainWindow::MainWindow(QString initFile)
     Selection::_eventWidget = _eventWidget;
     lowerTabWidget->addTab(_eventWidget, "Event");
     MidiEvent::setEventWidget(_eventWidget);
-    connect(_eventWidget, SIGNAL(selectionChangedByTool(bool)), this, SLOT(showEventWidget(bool)));
 
     // below add two rows for choosing track/channel new events shall be assigned to
     QWidget* chooser = new QWidget(rightSplitter);
@@ -492,6 +504,10 @@ MainWindow::MainWindow(QString initFile)
     }
     copiedEventsChanged();
     setAcceptDrops(true);
+
+    currentTweakTarget = new TimeTweakTarget(this);
+    selectionNavigator = new SelectionNavigator(this);
+
     QTimer::singleShot(200, this, SLOT(loadInitFile()));
     if (UpdateManager::autoCheckForUpdates()) {
         QTimer::singleShot(500, UpdateManager::instance(), SLOT(checkForUpdates()));
@@ -571,6 +587,16 @@ void MainWindow::setFile(MidiFile* file)
     mw_matrixWidget->update();
     _miscWidget->update();
     checkEnableActionsForSelection();
+}
+
+MidiFile* MainWindow::getFile()
+{
+    return file;
+}
+
+MatrixWidget* MainWindow::matrixWidget()
+{
+    return mw_matrixWidget;
 }
 
 void MainWindow::matrixSizeChanged(int maxScrollTime, int maxScrollLine,
@@ -813,6 +839,75 @@ void MainWindow::backToBegin()
     file->setPauseTick(0);
     file->setCursorTick(0);
 
+    mw_matrixWidget->update();
+}
+
+void MainWindow::forwardMarker()
+{
+    if (!file)
+        return;
+
+    int oldTick = file->cursorTick();
+    if (file->pauseTick() >= 0) {
+        oldTick = file->pauseTick();
+    }
+    if (MidiPlayer::isPlaying() && !MidiInput::recording()) {
+        oldTick = file->tick(MidiPlayer::timeMs());
+        stop(true);
+    }
+
+    int newTick = -1;
+
+    foreach (MidiEvent* event, file->channel(16)->eventMap()->values()) {
+        int eventTick = event->midiTime();
+        if (eventTick <= oldTick) continue;
+        TextEvent* textEvent = dynamic_cast<TextEvent*>(event);
+
+        if (textEvent && textEvent->type() == TextEvent::MARKER) {
+            newTick = eventTick;
+            break;
+        }
+    }
+
+    if (newTick < 0) return;
+    file->setPauseTick(newTick);
+    file->setCursorTick(newTick);
+    mw_matrixWidget->timeMsChanged(file->msOfTick(newTick), true);
+    mw_matrixWidget->update();
+}
+
+void MainWindow::backMarker()
+{
+    if (!file)
+        return;
+
+    int oldTick = file->cursorTick();
+    if (file->pauseTick() >= 0) {
+        oldTick = file->pauseTick();
+    }
+    if (MidiPlayer::isPlaying() && !MidiInput::recording()) {
+        oldTick = file->tick(MidiPlayer::timeMs());
+        stop(true);
+    }
+
+    int newTick = 0;
+    QList<MidiEvent*> events = file->channel(16)->eventMap()->values();
+
+    for (int eventNumber = events.size() - 1; eventNumber >= 0; eventNumber--) {
+        MidiEvent* event = events.at(eventNumber);
+        int eventTick = event->midiTime();
+        if (eventTick >= oldTick) continue;
+        TextEvent* textEvent = dynamic_cast<TextEvent*>(event);
+
+        if (textEvent && textEvent->type() == TextEvent::MARKER) {
+            newTick = eventTick;
+            break;
+        }
+    }
+
+    file->setPauseTick(newTick);
+    file->setCursorTick(newTick);
+    mw_matrixWidget->timeMsChanged(file->msOfTick(newTick), true);
     mw_matrixWidget->update();
 }
 
@@ -1143,6 +1238,8 @@ void MainWindow::closeEvent(QCloseEvent* event)
 
     _settings->setValue("auto_update_after_prompt", UpdateManager::autoCheckForUpdates());
     _settings->setValue("has_prompted_for_updates", true); // Happens on first start
+
+    Appearance::writeSettings(_settings);
 }
 
 void MainWindow::donate()
@@ -1548,7 +1645,6 @@ void MainWindow::updateTrackMenu()
         QVariant variant(i);
         QAction* moveToTrackAction = new QAction(QString::number(i) + " " + file->tracks()->at(i)->name(), this);
         moveToTrackAction->setData(variant);
-        moveToTrackAction->setShortcut(QKeySequence(Qt::Key_0 + i + Qt::ALT));
         _moveSelectedEventsToTrackMenu->addAction(moveToTrackAction);
     }
 
@@ -2050,27 +2146,13 @@ void MainWindow::spreadSelection()
 
 void MainWindow::manual()
 {
-
-    QProcess* process = new QProcess;
-    process->setWorkingDirectory("assistant");
-    QStringList args;
-    args << QLatin1String("-collectionFile")
-         << QLatin1String("midieditor-collection.qhc");
-
-#ifdef __WINDOWS_MM__
-    process->start(QLatin1String("assistant/assistant"), args);
-#else
-    process->start(QLatin1String("assistant"), args);
-#endif
-
-    if (!process->waitForStarted())
-        return;
+    QDesktopServices::openUrl(QUrl("http://www.midieditor.org/index.php?category=manual&subcategory=editor-and-components", QUrl::TolerantMode));
 }
 
 void MainWindow::changeMiscMode(int mode)
 {
     _miscWidget->setMode(mode);
-    if (mode == VelocityEditor) {
+    if (mode == VelocityEditor || mode == TempoEditor) {
         _miscChannel->setEnabled(false);
     } else {
         _miscChannel->setEnabled(true);
@@ -2088,6 +2170,8 @@ void MainWindow::changeMiscMode(int mode)
                 _miscController->addItem("Note: " + QString::number(i));
             }
         }
+
+        _miscController->view()->setMinimumWidth(_miscController->minimumSizeHint().width());
     } else {
         _miscController->setEnabled(false);
     }
@@ -2205,6 +2289,28 @@ QWidget* MainWindow::setupActions(QWidget* parent)
 
     editMB->addSeparator();
 
+    QAction* navigateSelectionUpAction = new QAction("Navigate selection up", editMB);
+    navigateSelectionUpAction->setShortcut(Qt::Key_Up);
+    connect(navigateSelectionUpAction, SIGNAL(triggered()), this, SLOT(navigateSelectionUp()));
+    editMB->addAction(navigateSelectionUpAction);
+
+    QAction* navigateSelectionDownAction = new QAction("Navigate selection down", editMB);
+    navigateSelectionDownAction->setShortcut(Qt::Key_Down);
+    connect(navigateSelectionDownAction, SIGNAL(triggered()), this, SLOT(navigateSelectionDown()));
+    editMB->addAction(navigateSelectionDownAction);
+
+    QAction* navigateSelectionLeftAction = new QAction("Navigate selection left", editMB);
+    navigateSelectionLeftAction->setShortcut(Qt::Key_Left);
+    connect(navigateSelectionLeftAction, SIGNAL(triggered()), this, SLOT(navigateSelectionLeft()));
+    editMB->addAction(navigateSelectionLeftAction);
+
+    QAction* navigateSelectionRightAction = new QAction("Navigate selection right", editMB);
+    navigateSelectionRightAction->setShortcut(Qt::Key_Right);
+    connect(navigateSelectionRightAction, SIGNAL(triggered()), this, SLOT(navigateSelectionRight()));
+    editMB->addAction(navigateSelectionRightAction);
+
+    editMB->addSeparator();
+
     QAction* copyAction = new QAction("Copy events", this);
     _activateWithSelections.append(copyAction);
     copyAction->setIcon(QIcon(":/run_environment/graphics/tool/copy.png"));
@@ -2263,37 +2369,124 @@ QWidget* MainWindow::setupActions(QWidget* parent)
     toolsToolsMenu->addAction(stdToolAction);
     tool->buttonClick();
 
-    QAction* selectSingleAction = new ToolButton(new SelectTool(SELECTION_TYPE_SINGLE), QKeySequence(Qt::Key_F2), toolsToolsMenu);
+    QAction* newNoteAction = new ToolButton(new NewNoteTool(), QKeySequence(Qt::Key_F2), toolsToolsMenu);
+    toolsToolsMenu->addAction(newNoteAction);
+    QAction* removeNotesAction = new ToolButton(new EraserTool(), QKeySequence(Qt::Key_F3), toolsToolsMenu);
+    toolsToolsMenu->addAction(removeNotesAction);
+
+    toolsToolsMenu->addSeparator();
+
+    QAction* selectSingleAction = new ToolButton(new SelectTool(SELECTION_TYPE_SINGLE), QKeySequence(Qt::Key_F4), toolsToolsMenu);
     toolsToolsMenu->addAction(selectSingleAction);
-    QAction* selectBoxAction = new ToolButton(new SelectTool(SELECTION_TYPE_BOX), QKeySequence(Qt::Key_F3), toolsToolsMenu);
+    QAction* selectBoxAction = new ToolButton(new SelectTool(SELECTION_TYPE_BOX), QKeySequence(Qt::Key_F5), toolsToolsMenu);
     toolsToolsMenu->addAction(selectBoxAction);
-    QAction* selectLeftAction = new ToolButton(new SelectTool(SELECTION_TYPE_LEFT), QKeySequence(Qt::Key_F4), toolsToolsMenu);
+    QAction* selectLeftAction = new ToolButton(new SelectTool(SELECTION_TYPE_LEFT), QKeySequence(Qt::Key_F6), toolsToolsMenu);
     toolsToolsMenu->addAction(selectLeftAction);
-    QAction* selectRightAction = new ToolButton(new SelectTool(SELECTION_TYPE_RIGHT), QKeySequence(Qt::Key_F5), toolsToolsMenu);
+    QAction* selectRightAction = new ToolButton(new SelectTool(SELECTION_TYPE_RIGHT), QKeySequence(Qt::Key_F7), toolsToolsMenu);
     toolsToolsMenu->addAction(selectRightAction);
 
     toolsToolsMenu->addSeparator();
-    QAction* moveAllAction = new ToolButton(new EventMoveTool(true, true), QKeySequence(Qt::Key_F6), toolsToolsMenu);
+
+    QAction* moveAllAction = new ToolButton(new EventMoveTool(true, true), QKeySequence(Qt::Key_F8), toolsToolsMenu);
     _activateWithSelections.append(moveAllAction);
     toolsToolsMenu->addAction(moveAllAction);
-    QAction* moveLRAction = new ToolButton(new EventMoveTool(false, true), QKeySequence(Qt::Key_F7), toolsToolsMenu);
+    QAction* moveLRAction = new ToolButton(new EventMoveTool(false, true), QKeySequence(Qt::Key_F9), toolsToolsMenu);
     _activateWithSelections.append(moveLRAction);
     toolsToolsMenu->addAction(moveLRAction);
-    QAction* moveUDAction = new ToolButton(new EventMoveTool(true, false), QKeySequence(Qt::Key_F8), toolsToolsMenu);
+    QAction* moveUDAction = new ToolButton(new EventMoveTool(true, false), QKeySequence(Qt::Key_F10), toolsToolsMenu);
     _activateWithSelections.append(moveUDAction);
     toolsToolsMenu->addAction(moveUDAction);
-    QAction* sizeChangeAction = new ToolButton(new SizeChangeTool(), QKeySequence(Qt::Key_F9), toolsToolsMenu);
+    QAction* sizeChangeAction = new ToolButton(new SizeChangeTool(), QKeySequence(Qt::Key_F11), toolsToolsMenu);
     _activateWithSelections.append(sizeChangeAction);
     toolsToolsMenu->addAction(sizeChangeAction);
 
     toolsToolsMenu->addSeparator();
 
-    QAction* newNoteAction = new ToolButton(new NewNoteTool(), QKeySequence(Qt::Key_F10), toolsToolsMenu);
-    toolsToolsMenu->addAction(newNoteAction);
-    QAction* removeNotesAction = new ToolButton(new EraserTool(), QKeySequence(Qt::Key_F11), toolsToolsMenu);
-    toolsToolsMenu->addAction(removeNotesAction);
+    QAction* measureAction= new ToolButton(new MeasureTool(), QKeySequence(Qt::Key_F12), toolsToolsMenu);
+    toolsToolsMenu->addAction(measureAction);
+    QAction* timeSignatureAction= new ToolButton(new TimeSignatureTool(), QKeySequence(Qt::Key_F13), toolsToolsMenu);
+    toolsToolsMenu->addAction(timeSignatureAction);
+    QAction* tempoAction= new ToolButton(new TempoTool(), QKeySequence(Qt::Key_F14), toolsToolsMenu);
+    toolsToolsMenu->addAction(tempoAction);
 
     toolsMB->addMenu(toolsToolsMenu);
+
+    // Tweak
+
+    QMenu* tweakMenu = new QMenu("Tweak...", toolsMB);
+
+    QAction* tweakTimeAction = new QAction("Time", tweakMenu);
+    tweakTimeAction->setShortcut(Qt::Key_1);
+    tweakTimeAction->setCheckable(true);
+    connect(tweakTimeAction, SIGNAL(triggered()), this, SLOT(tweakTime()));
+    tweakMenu->addAction(tweakTimeAction);
+
+    QAction* tweakStartTimeAction = new QAction("Start time", tweakMenu);
+    tweakStartTimeAction->setShortcut(Qt::Key_2);
+    tweakStartTimeAction->setCheckable(true);
+    connect(tweakStartTimeAction, SIGNAL(triggered()), this, SLOT(tweakStartTime()));
+    tweakMenu->addAction(tweakStartTimeAction);
+
+    QAction* tweakEndTimeAction = new QAction("End time", tweakMenu);
+    tweakEndTimeAction->setShortcut(Qt::Key_3);
+    tweakEndTimeAction->setCheckable(true);
+    connect(tweakEndTimeAction, SIGNAL(triggered()), this, SLOT(tweakEndTime()));
+    tweakMenu->addAction(tweakEndTimeAction);
+
+    QAction* tweakNoteAction = new QAction("Note", tweakMenu);
+    tweakNoteAction->setShortcut(Qt::Key_4);
+    tweakNoteAction->setCheckable(true);
+    connect(tweakNoteAction, SIGNAL(triggered()), this, SLOT(tweakNote()));
+    tweakMenu->addAction(tweakNoteAction);
+
+    QAction* tweakValueAction = new QAction("Value", tweakMenu);
+    tweakValueAction->setShortcut(Qt::Key_5);
+    tweakValueAction->setCheckable(true);
+    connect(tweakValueAction, SIGNAL(triggered()), this, SLOT(tweakValue()));
+    tweakMenu->addAction(tweakValueAction);
+
+    QActionGroup* tweakTargetActionGroup = new QActionGroup(this);
+    tweakTargetActionGroup->setExclusive(true);
+    tweakTargetActionGroup->addAction(tweakTimeAction);
+    tweakTargetActionGroup->addAction(tweakStartTimeAction);
+    tweakTargetActionGroup->addAction(tweakEndTimeAction);
+    tweakTargetActionGroup->addAction(tweakNoteAction);
+    tweakTargetActionGroup->addAction(tweakValueAction);
+    tweakTimeAction->setChecked(true);
+
+    tweakMenu->addSeparator();
+
+    QAction* tweakSmallDecreaseAction = new QAction("Small decrease", tweakMenu);
+    tweakSmallDecreaseAction->setShortcut(Qt::Key_9);
+    connect(tweakSmallDecreaseAction, SIGNAL(triggered()), this, SLOT(tweakSmallDecrease()));
+    tweakMenu->addAction(tweakSmallDecreaseAction);
+
+    QAction* tweakSmallIncreaseAction = new QAction("Small increase", tweakMenu);
+    tweakSmallIncreaseAction->setShortcut(Qt::Key_0);
+    connect(tweakSmallIncreaseAction, SIGNAL(triggered()), this, SLOT(tweakSmallIncrease()));
+    tweakMenu->addAction(tweakSmallIncreaseAction);
+
+    QAction* tweakMediumDecreaseAction = new QAction("Medium decrease", tweakMenu);
+    tweakMediumDecreaseAction->setShortcut(Qt::Key_9 + Qt::ALT);
+    connect(tweakMediumDecreaseAction, SIGNAL(triggered()), this, SLOT(tweakMediumDecrease()));
+    tweakMenu->addAction(tweakMediumDecreaseAction);
+
+    QAction* tweakMediumIncreaseAction = new QAction("Medium increase", tweakMenu);
+    tweakMediumIncreaseAction->setShortcut(Qt::Key_0 + Qt::ALT);
+    connect(tweakMediumIncreaseAction, SIGNAL(triggered()), this, SLOT(tweakMediumIncrease()));
+    tweakMenu->addAction(tweakMediumIncreaseAction);
+
+    QAction* tweakLargeDecreaseAction = new QAction("Large decrease", tweakMenu);
+    tweakLargeDecreaseAction->setShortcut(Qt::Key_9 + Qt::ALT + Qt::SHIFT);
+    connect(tweakLargeDecreaseAction, SIGNAL(triggered()), this, SLOT(tweakLargeDecrease()));
+    tweakMenu->addAction(tweakLargeDecreaseAction);
+
+    QAction* tweakLargeIncreaseAction = new QAction("Large increase", tweakMenu);
+    tweakLargeIncreaseAction->setShortcut(Qt::Key_0 + Qt::ALT + Qt::SHIFT);
+    connect(tweakLargeIncreaseAction, SIGNAL(triggered()), this, SLOT(tweakLargeIncrease()));
+    tweakMenu->addAction(tweakLargeIncreaseAction);
+
+    toolsMB->addMenu(tweakMenu);
 
     QAction* deleteAction = new QAction("Remove events", this);
     _activateWithSelections.append(deleteAction);
@@ -2553,7 +2746,11 @@ QWidget* MainWindow::setupActions(QWidget* parent)
 
     QAction* pauseAction = new QAction("Pause", this);
     pauseAction->setIcon(QIcon(":/run_environment/graphics/tool/pause.png"));
+#ifdef Q_OS_MAC
+    pauseAction->setShortcut(QKeySequence(Qt::Key_Space + Qt::META));
+#else
     pauseAction->setShortcut(QKeySequence(Qt::Key_Space + Qt::CTRL));
+#endif
     connect(pauseAction, SIGNAL(triggered()), this, SLOT(pause()));
     playbackMB->addAction(pauseAction);
 
@@ -2573,9 +2770,9 @@ QWidget* MainWindow::setupActions(QWidget* parent)
     QAction* backToBeginAction = new QAction("Back to begin", this);
     backToBeginAction->setIcon(QIcon(":/run_environment/graphics/tool/back_to_begin.png"));
     QList<QKeySequence> backToBeginActionShortcuts;
-    backToBeginActionShortcuts << QKeySequence(Qt::Key_Home)
-                               << QKeySequence(Qt::Key_J + Qt::SHIFT)
-                               << QKeySequence(Qt::Key_Left + Qt::SHIFT);
+    backToBeginActionShortcuts << QKeySequence(Qt::Key_Up + Qt::ALT)
+                               << QKeySequence(Qt::Key_Home + Qt::ALT)
+                               << QKeySequence(Qt::Key_J + Qt::SHIFT);
     backToBeginAction->setShortcuts(backToBeginActionShortcuts);
     connect(backToBeginAction, SIGNAL(triggered()), this, SLOT(backToBegin()));
     playbackMB->addAction(backToBeginAction);
@@ -2583,8 +2780,8 @@ QWidget* MainWindow::setupActions(QWidget* parent)
     QAction* backAction = new QAction("Previous measure", this);
     backAction->setIcon(QIcon(":/run_environment/graphics/tool/back.png"));
     QList<QKeySequence> backActionShortcuts;
-    backActionShortcuts << QKeySequence(Qt::Key_J)
-                        << QKeySequence(Qt::Key_Left);
+    backActionShortcuts << QKeySequence(Qt::Key_Left + Qt::ALT)
+                        << QKeySequence(Qt::Key_J);
     backAction->setShortcuts(backActionShortcuts);
     connect(backAction, SIGNAL(triggered()), this, SLOT(back()));
     playbackMB->addAction(backAction);
@@ -2592,11 +2789,27 @@ QWidget* MainWindow::setupActions(QWidget* parent)
     QAction* forwAction = new QAction("Next measure", this);
     forwAction->setIcon(QIcon(":/run_environment/graphics/tool/forward.png"));
     QList<QKeySequence> forwActionShortcuts;
-    forwActionShortcuts << QKeySequence(Qt::Key_L)
-                        << QKeySequence(Qt::Key_Right);
+    forwActionShortcuts << QKeySequence(Qt::Key_Right + Qt::ALT)
+                        << QKeySequence(Qt::Key_L);
     forwAction->setShortcuts(forwActionShortcuts);
     connect(forwAction, SIGNAL(triggered()), this, SLOT(forward()));
     playbackMB->addAction(forwAction);
+
+    playbackMB->addSeparator();
+
+    QAction* backMarkerAction = new QAction("Previous marker", this);
+    backMarkerAction->setIcon(QIcon(":/run_environment/graphics/tool/back_marker.png"));
+    QList<QKeySequence> backMarkerActionShortcuts;
+    backMarkerAction->setShortcut(QKeySequence(Qt::Key_Comma + Qt::ALT));
+    connect(backMarkerAction, SIGNAL(triggered()), this, SLOT(backMarker()));
+    playbackMB->addAction(backMarkerAction);
+
+    QAction* forwMarkerAction = new QAction("Next marker", this);
+    forwMarkerAction->setIcon(QIcon(":/run_environment/graphics/tool/forward_marker.png"));
+    QList<QKeySequence> forwMarkerActionShortcuts;
+    forwMarkerAction->setShortcut(QKeySequence(Qt::Key_Period + Qt::ALT));
+    connect(forwMarkerAction, SIGNAL(triggered()), this, SLOT(forwardMarker()));
+    playbackMB->addAction(forwMarkerAction);
 
     playbackMB->addSeparator();
 
@@ -2665,6 +2878,8 @@ QWidget* MainWindow::setupActions(QWidget* parent)
     midiMB->addSeparator();
 
     QAction* panicAction = new QAction("Midi panic", this);
+    panicAction->setIcon(QIcon(":/run_environment/graphics/tool/panic.png"));
+    panicAction->setShortcut(QKeySequence(Qt::Key_Escape));
     connect(panicAction, SIGNAL(triggered()), this, SLOT(panic()));
     midiMB->addAction(panicAction);
 
@@ -2720,12 +2935,14 @@ QWidget* MainWindow::setupActions(QWidget* parent)
         playTB->setIconSize(QSize(35, 35));
 
         playTB->addAction(backToBeginAction);
+        playTB->addAction(backMarkerAction);
         playTB->addAction(backAction);
         playTB->addAction(playAction);
         playTB->addAction(pauseAction);
         playTB->addAction(stopAction);
         playTB->addAction(recAction);
         playTB->addAction(forwAction);
+        playTB->addAction(forwMarkerAction);
         playTB->addSeparator();
 
         btnLayout->addWidget(playTB, 0, 1, 2, 1);
@@ -2768,51 +2985,45 @@ QWidget* MainWindow::setupActions(QWidget* parent)
     if (!QApplication::arguments().contains("--large-playback-toolbar")) {
 
         lowerTB->addAction(backToBeginAction);
+        lowerTB->addAction(backMarkerAction);
         lowerTB->addAction(backAction);
         lowerTB->addAction(playAction);
         lowerTB->addAction(pauseAction);
         lowerTB->addAction(stopAction);
         lowerTB->addAction(recAction);
         lowerTB->addAction(forwAction);
+        lowerTB->addAction(forwMarkerAction);
         lowerTB->addSeparator();
     }
 
     lowerTB->addAction(lockAction);
+    lowerTB->addAction(metronomeAction);
+    lowerTB->addAction(thruAction);
+    lowerTB->addAction(panicAction);
 
     upperTB->addAction(stdToolAction);
+    upperTB->addAction(newNoteAction);
+    upperTB->addAction(removeNotesAction);
+    upperTB->addSeparator();
     upperTB->addAction(selectSingleAction);
     upperTB->addAction(selectBoxAction);
     upperTB->addAction(selectLeftAction);
     upperTB->addAction(selectRightAction);
-
     upperTB->addSeparator();
     upperTB->addAction(moveAllAction);
     upperTB->addAction(moveLRAction);
     upperTB->addAction(moveUDAction);
     upperTB->addAction(sizeChangeAction);
-
     upperTB->addSeparator();
-
+    upperTB->addAction(measureAction);
+    upperTB->addAction(timeSignatureAction);
+    upperTB->addAction(tempoAction);
+    upperTB->addSeparator();
     upperTB->addAction(alignLeftAction);
     upperTB->addAction(alignRightAction);
     upperTB->addAction(equalizeAction);
-
-    upperTB->addSeparator();
-
     upperTB->addAction(quantizeAction);
-
-    upperTB->addSeparator();
-
-    upperTB->addAction(newNoteAction);
-    upperTB->addAction(removeNotesAction);
-
-    upperTB->addSeparator();
     upperTB->addAction(magnetAction);
-
-    lowerTB->addSeparator();
-    lowerTB->addAction(metronomeAction);
-    lowerTB->addSeparator();
-    lowerTB->addAction(thruAction);
 
     btnLayout->setColumnStretch(4, 1);
 
@@ -2846,6 +3057,7 @@ void MainWindow::openConfig()
 #else
     SettingsDialog* d = new SettingsDialog("Settings", _settings, 0, this);
 #endif
+    connect(d, SIGNAL(settingsChanged()), this, SLOT(updateAll()));
     d->show();
 }
 
@@ -2881,11 +3093,11 @@ void MainWindow::quantizeSelection()
         OnEvent* on = dynamic_cast<OnEvent*>(e);
         if (on) {
             MidiEvent* off = on->offEvent();
-            off->setMidiTime(quantize(off->midiTime(), ticks));
-            if (off->midiTime() == on->midiTime()) {
-                int idx = ticks.indexOf(off->midiTime());
+            off->setMidiTime(quantize(off->midiTime(), ticks)-1);
+            if (off->midiTime() <= on->midiTime()) {
+                int idx = ticks.indexOf(off->midiTime()+1);
                 if ((idx >= 0) && (ticks.size() > idx + 1)) {
-                    off->setMidiTime(ticks.at(idx + 1));
+                    off->setMidiTime(ticks.at(idx + 1) - 1);
                 }
             }
         }
@@ -3044,4 +3256,77 @@ void MainWindow::promtUpdatesDeactivatedDialog() {
     AutomaticUpdateDialog* d = new AutomaticUpdateDialog(this);
     d->setModal(true);
     d->exec();
+}
+
+void MainWindow::updateAll() {
+    mw_matrixWidget->registerRelayout();
+    mw_matrixWidget->update();
+    channelWidget->update();
+    _trackWidget->update();
+    _miscWidget->update();
+}
+
+void MainWindow::tweakTime() {
+    delete currentTweakTarget;
+    currentTweakTarget = new TimeTweakTarget(this);
+}
+
+void MainWindow::tweakStartTime() {
+    delete currentTweakTarget;
+    currentTweakTarget = new StartTimeTweakTarget(this);
+}
+
+void MainWindow::tweakEndTime() {
+    delete currentTweakTarget;
+    currentTweakTarget = new EndTimeTweakTarget(this);
+}
+
+void MainWindow::tweakNote() {
+    delete currentTweakTarget;
+    currentTweakTarget = new NoteTweakTarget(this);
+}
+
+void MainWindow::tweakValue() {
+    delete currentTweakTarget;
+    currentTweakTarget = new ValueTweakTarget(this);
+}
+
+void MainWindow::tweakSmallDecrease() {
+    currentTweakTarget->smallDecrease();
+}
+
+void MainWindow::tweakSmallIncrease() {
+    currentTweakTarget->smallIncrease();
+}
+
+void MainWindow::tweakMediumDecrease() {
+    currentTweakTarget->mediumDecrease();
+}
+
+void MainWindow::tweakMediumIncrease() {
+    currentTweakTarget->mediumIncrease();
+}
+
+void MainWindow::tweakLargeDecrease() {
+    currentTweakTarget->largeDecrease();
+}
+
+void MainWindow::tweakLargeIncrease() {
+    currentTweakTarget->largeIncrease();
+}
+
+void MainWindow::navigateSelectionUp() {
+    selectionNavigator->up();
+}
+
+void MainWindow::navigateSelectionDown() {
+    selectionNavigator->down();
+}
+
+void MainWindow::navigateSelectionLeft() {
+    selectionNavigator->left();
+}
+
+void MainWindow::navigateSelectionRight() {
+    selectionNavigator->right();
 }
