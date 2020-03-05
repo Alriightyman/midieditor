@@ -67,6 +67,7 @@ public:
 
     static QString instrumentName(int prog);
     static QString controlChangeName(int control);
+    static QString smpsControlChangeName(int control);
     int cursorTick();
     int pauseTick();
     void setCursorTick(int tick);

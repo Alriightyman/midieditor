@@ -292,7 +292,7 @@ MainWindow::MainWindow(QString initFile)
     //_miscControlLayout->addWidget(new QLabel("Control:", _miscWidgetControl), 2, 0, 1, 3);
     _miscController = new QComboBox(_miscWidgetControl);
     for (int i = 0; i < 128; i++) {
-        _miscController->addItem(MidiFile::controlChangeName(i));
+        _miscController->addItem(MidiFile::smpsControlChangeName(i));
     }
     _miscController->view()->setMinimumWidth(_miscController->minimumSizeHint().width());
     _miscControlLayout->addWidget(_miscController, 3, 0, 1, 3);
@@ -2163,7 +2163,7 @@ void MainWindow::changeMiscMode(int mode)
 
         if (mode == ControllEditor) {
             for (int i = 0; i < 128; i++) {
-                _miscController->addItem(MidiFile::controlChangeName(i));
+                _miscController->addItem(MidiFile::smpsControlChangeName(i));
             }
         } else {
             for (int i = 0; i < 128; i++) {

@@ -1074,6 +1074,89 @@ QString MidiFile::instrumentName(int prog)
     return "out of range";
 }
 
+QString MidiFile::smpsControlChangeName(int control)
+{
+
+    switch (control) {
+    case 0: {
+        return "[FM] Select FM instrument bank\n00-4F - use assigned FM Melody instruments\n50 - use unmapped FM Melody bank (80 dec)\n51 - use unmapped FM Drum bank (81 dec)\n52-7F - use assigned FM Melody instruments";
+    }
+    case 1: {
+        return "Modulation On (+Setup)/Off";
+    }
+    case 3: {
+        return "[PSG] Set PSG Noise Mode";
+    }
+    case 6: {
+        return "[adjust RPN/NRPN settings*]";
+    }
+    case 7: {
+        return "Channel Volume";
+    }
+    case 9: {
+        return "Set Note Stop Timeout (notes get stopped after x frames)";
+    }
+
+    case 10: {
+        return "[FM/DAC] Set Channel Pan";
+    }
+
+    case 16: {
+        return "Modulation Setting 1: initial delay in frames (0 - no delay)";
+    }
+    case 17: {
+        return "Modulation Setting 2: Update Speed (0 - auto, 1 = fastest, 2 = 50%, 3 = 33%, etc.)";
+    }
+    case 18: {
+        return "Modulation Setting 3: frequency change per step (0 - auto)";
+    }
+    case 19: {
+        return "Modulation Setting 4: ramp length (0 - auto, update steps before frequency change is inversed)";
+    }
+
+    case 32: {
+        return "[FM] Set instrument range for unmapped banks/[PSG] Set PSG Tone (only for instrument changes >= 50 [81 Square Wave])";
+    }
+
+
+    case 64: {
+        return "Hold Notes On/Off";
+    }
+    case 65: {
+        return "No-Attack-Mode Enable/Disable";
+    }
+
+    case 89: {
+        return "set Communication Data (SMPS command E2)";
+    }
+
+
+    case 93: {
+        return "channel volume boost";
+    }
+
+    case 98: {
+        return "[adjust RPN/NRPN settings*]";
+    }
+    case 99: {
+        return "[adjust RPN/NRPN settings*]";
+    }
+    case 100: {
+        return "[adjust RPN/NRPN settings*]";
+    }
+    case 101: {
+        return "[adjust RPN/NRPN settings*]";
+    }
+    case 111: {
+        return "Loop Control";
+    }
+
+    }
+
+    return "unused";
+}
+
+
 QString MidiFile::controlChangeName(int control)
 {
 
